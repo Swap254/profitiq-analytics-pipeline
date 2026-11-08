@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Pytest
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# Generated dataset
+data/corporate_data.csv
+
+# Local model artifact
+model/*.pkl
+
+# Environment/config files
+.env
+.env.*
+*.env
+
+# OS files
+.DS_Store
+Thumbs.db

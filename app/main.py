@@ -1,61 +1,119 @@
 import os
 import pickle
-import numpy as np
+
 import pandas as pd
 from fastapi import FastAPI, HTTPException
-from app.schemas import CorporateMetricsIn
+
+from app.schemas import CorporateMetricsIn, BatchCorporateMetricsIn
+
 
 app = FastAPI(
-    title="ProfitIQ Enterprise Optimization API",
-    description="REST API processing high-fidelity corporate performance predictions.",
-    version="1.1"
+    title="ProfitIQ Analytics API",
+    description="API for predicting corporate profit from financial metrics.",
+    version="1.0.0",
 )
+
 
 model = None
 
+
 @app.on_event("startup")
-def load_serialized_model():
-    """
-    Executes on container startup initialization.
-    Loads the trained model into memory to guarantee sub-millisecond API response arrays.
-    """
+def load_model():
     global model
-    model_path = os.path.join(os.path.dirname(__file__), "random_forest_model.pkl")
+
+    model_path = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        "model",
+        "random_forest_model.pkl",
+    )
+
+    model_path = os.path.abspath(model_path)
 
     if not os.path.exists(model_path):
-        print("⚠️ Warning: Pre-trained binary model artifact not found. Initializing a mock regressor layer.")
-        class MockModel:
-            def predict(self, df):
-                return np.array([df['rd_spend'].values * 0.85 + df['marketing_spend'].values * 0.05 + 50000.00])
-        model = MockModel()
-    else:
-        with open(model_path, "rb") as f:
-            model = pickle.load(f)
-        print("✅ Production Random Forest model binary cleanly mapped into microservice execution RAM.")
+        raise RuntimeError(
+            f"Trained model not found at: {model_path}"
+        )
 
-@app.post("/api/v1/predict", status_code=200)
-async def execute_profit_prediction(payload: CorporateMetricsIn):
-    """
-    Ingests validated JSON structures, maps them to dataframes, and returns predictive yields.
-    """
+    with open(model_path, "rb") as file:
+        model = pickle.load(file)
+
+    print(f"Model loaded successfully from: {model_path}")
+
+
+@app.get("/health")
+def health_check():
+    return {
+        "status": "healthy",
+        "model_loaded": model is not None,
+    }
+
+
+@app.post("/api/v1/predict")
+async def predict_profit(payload: CorporateMetricsIn):
     try:
-        input_data = pd.DataFrame([{
-            "rd_spend": payload.rd_spend,
-            "admin_cost": payload.admin_cost,
-            "marketing_spend": payload.marketing_spend
-        }])
+        input_data = pd.DataFrame([
+            {
+                "rd_spend": payload.rd_spend,
+                "admin_cost": payload.admin_cost,
+                "marketing_spend": payload.marketing_spend,
+            }
+        ])
 
-        predicted_yield = model.predict(input_data)
+        prediction = model.predict(input_data)
 
         return {
-            "status": "PROCESSED",
-            "evaluated_metrics": {
-                "research_development_spend": payload.rd_spend,
-                "administrative_overhead": payload.admin_cost,
-                "marketing_allocation": payload.marketing_spend
+            "status": "success",
+            "input": {
+                "rd_spend": payload.rd_spend,
+                "admin_cost": payload.admin_cost,
+                "marketing_spend": payload.marketing_spend,
             },
-            "predicted_corporate_profit": round(float(predicted_yield), 2)
+            "predicted_profit": round(float(prediction[0]), 2),
         }
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Core inference pipeline failure: {str(e)}")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Prediction failed: {str(exc)}",
+        )
+
+
+@app.post("/api/v1/predict/batch")
+async def predict_profit_batch(payload: BatchCorporateMetricsIn):
+    try:
+        input_data = pd.DataFrame([
+            {
+                "rd_spend": record.rd_spend,
+                "admin_cost": record.admin_cost,
+                "marketing_spend": record.marketing_spend,
+            }
+            for record in payload.records
+        ])
+
+        predictions = model.predict(input_data)
+
+        results = []
+
+        for record, prediction in zip(
+                payload.records,
+                predictions,
+        ):
+            results.append({
+                "rd_spend": record.rd_spend,
+                "admin_cost": record.admin_cost,
+                "marketing_spend": record.marketing_spend,
+                "predicted_profit": round(float(prediction), 2),
+            })
+
+        return {
+            "status": "success",
+            "records_processed": len(results),
+            "predictions": results,
+        }
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Batch prediction failed: {str(exc)}",
+        )
